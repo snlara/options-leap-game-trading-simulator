@@ -29,20 +29,20 @@ def black_scholes_call(S, K, T, r, sigma):
 class LeapGameGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("30-Year LEAPs Trading Simulator (with Margin & Physical Exercise)")
+        self.root.title("30-Year LEAPs Trading Simulator (with Deep ITM Strikes)")
         self.root.geometry("1250x850")
         
         # Game Constants
         self.IV = 0.30
-        self.R_FREE = 0.0
+        self.R_FREE = 0.0  # Set to 0% to isolate pure volatility premium math
         
         # Game State Variables
         self.df = None
         self.ticker_symbol = ""
         self.current_wk_idx = 200  
-        self.cash = 100000.0       # Can go negative if Margin Loan is utilized
+        self.cash = 100000.0       
         self.shares_owned = 0
-        self.leaps_owned = []      # List of dicts: {'strike': K, 'qty': N, 'expiry_wk_idx': idx}
+        self.leaps_owned = []      
         
         self.setup_ticker_screen()
 
@@ -135,7 +135,8 @@ class LeapGameGUI:
         
         ttk.Label(left_panel, text="Select Strike Option (2-Yr LEAP):", font=("Helvetica", 9, "bold")).pack(anchor=tk.W, pady=(5, 1))
         self.strike_var = tk.StringVar(value="100%")
-        self.strike_menu = ttk.Combobox(left_panel, textvariable=self.strike_var, values=["100%", "125%", "150%", "200%"], state="readonly")
+        # Added the 33% option to values matrix here
+        self.strike_menu = ttk.Combobox(left_panel, textvariable=self.strike_var, values=["33%", "50%", "100%", "125%", "150%", "200%"], state="readonly")
         self.strike_menu.pack(fill=tk.X, pady=1)
         self.strike_menu.bind("<<ComboboxSelected>>", lambda e: self.update_order_pricing())
         
@@ -195,7 +196,8 @@ class LeapGameGUI:
         return row['Close'], self.df.index[self.current_wk_idx]
 
     def get_selected_strike(self, spot):
-        mult_map = {"100%": 1.0, "125%": 1.25, "150%": 1.50, "200%": 2.0}
+        # 33% ITM option corresponds to a strike price at ~67% of current spot price
+        mult_map = {"33%": 0.67, "50%": 0.50, "100%": 1.0, "125%": 1.25, "150%": 1.50, "200%": 2.0}
         return spot * mult_map.get(self.strike_var.get(), 1.0)
 
     def update_order_pricing(self):
@@ -227,7 +229,7 @@ class LeapGameGUI:
                     exercise_cost = leap['strike'] * 100 * leap['qty']
                     shares_added = 100 * leap['qty']
                     
-                    self.cash -= exercise_cost  # Can push cash negative -> Margin
+                    self.cash -= exercise_cost  
                     self.shares_owned += shares_added
                     
                     msg = f"LEAP Expired ITM! Strike: ${leap['strike']:.2f}\n" \
@@ -253,7 +255,6 @@ class LeapGameGUI:
         shares_value = self.shares_owned * spot
         net_worth = self.cash + shares_value + options_market_value
         
-        # Display separation between cash and margin lines
         if self.cash < 0:
             self.lbl_cash.config(text="Cash Balance: $0.00", foreground="black")
             self.lbl_margin.config(text=f"Margin Loan Utilized: ${abs(self.cash):,.2f}", foreground="red")
@@ -290,11 +291,9 @@ class LeapGameGUI:
             spot, _ = self.get_market_context()
             cost = qty * spot
             
-            # Note: We can allow buying directly on margin if desired, but here we restrict active cash buying to protect standard gameplay
             if cost > self.cash and self.cash > 0:
-                if messagebox.askyesno("Margin Order", "This purchase exceeds liquid cash reserves. Use your Margin Line?"):
-                    pass
-                else: return
+                if not messagebox.askyesno("Margin Order", "This purchase exceeds liquid cash reserves. Use your Margin Line?"):
+                    return
                 
             self.cash -= cost
             self.shares_owned += qty
@@ -359,7 +358,6 @@ class LeapGameGUI:
             spot, _ = self.get_market_context()
             collected_proceeds = 0.0
             
-            # FIFO (First In, First Out) Liquidation Process
             while qty_to_sell > 0 and len(self.leaps_owned) > 0:
                 oldest_tranche = self.leaps_owned[0]
                 remaining_weeks = oldest_tranche['expiry_wk_idx'] - self.current_wk_idx
@@ -367,12 +365,10 @@ class LeapGameGUI:
                 premium = black_scholes_call(spot, oldest_tranche['strike'], T_remaining, self.R_FREE, self.IV)
                 
                 if oldest_tranche['qty'] <= qty_to_sell:
-                    # Liquidate full contract position tranche
                     collected_proceeds += oldest_tranche['qty'] * premium * 100
                     qty_to_sell -= oldest_tranche['qty']
                     self.leaps_owned.pop(0)
                 else:
-                    # Liquidate partial contract position tranche
                     collected_proceeds += qty_to_sell * premium * 100
                     oldest_tranche['qty'] -= qty_to_sell
                     qty_to_sell = 0
